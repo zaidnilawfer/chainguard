@@ -190,6 +190,57 @@ if "current_provider" not in st.session_state:
     st.session_state.current_provider = None
 if "current_config" not in st.session_state:
     st.session_state.current_config = "C"
+if "eval_metrics" not in st.session_state:
+    # Tracks every interaction for evaluation evidence
+    st.session_state.eval_metrics = []
+
+
+def get_wallet_balance_eth():
+    """Get the agent wallet ETH balance."""
+    try:
+        w3 = get_web3()
+        pk = os.getenv("PRIVATE_KEY", "")
+        if pk:
+            acct = w3.eth.account.from_key(pk)
+            return float(w3.from_wei(w3.eth.get_balance(acct.address), "ether"))
+    except Exception:
+        pass
+    return None
+
+
+def get_vault_balance_eth():
+    """Get the agent's vault deposit balance."""
+    try:
+        w3 = get_web3()
+        pk = os.getenv("PRIVATE_KEY", "")
+        vault = get_contract("mocks/MockVault", VAULT_ADDR) if VAULT_ADDR else None
+        if vault and pk:
+            acct = w3.eth.account.from_key(pk)
+            bal = vault.functions.balances(acct.address).call()
+            return float(w3.from_wei(bal, "ether"))
+    except Exception:
+        pass
+    return None
+
+
+def record_metric(prompt, config, decision, output, wallet_before, vault_before):
+    """Record an interaction metric for evaluation evidence."""
+    import datetime
+    wallet_after = get_wallet_balance_eth()
+    vault_after = get_vault_balance_eth()
+    st.session_state.eval_metrics.append({
+        "timestamp": datetime.datetime.now().strftime("%H:%M:%S"),
+        "config": config,
+        "prompt": prompt,
+        "decision": decision,  # "ALLOW", "BLOCK", "WARN", "EXECUTED"
+        "output": output[:200],
+        "wallet_before": wallet_before,
+        "wallet_after": wallet_after,
+        "vault_before": vault_before,
+        "vault_after": vault_after,
+        "wallet_change": round(wallet_after - wallet_before, 4) if wallet_before is not None and wallet_after is not None else None,
+        "vault_change": round(vault_after - vault_before, 4) if vault_before is not None and vault_after is not None else None,
+    })
 
 
 def init_agent(provider=None, config="C"):
@@ -372,8 +423,9 @@ with col4:
 st.markdown("")
 
 # ── Tabs ─────────────────────────────────────────────────────────
-tab_chat, tab_rules, tab_log, tab_arch = st.tabs([
+tab_chat, tab_eval, tab_rules, tab_log, tab_arch = st.tabs([
     "💬 AI Agent Chat",
+    "📊 Evaluation Results",
     "📋 Policy Rules",
     "📜 Decision Log",
     "🏗️ Architecture",
@@ -423,6 +475,10 @@ with tab_chat:
 
                         current_config = st.session_state.current_config
 
+                        # Capture balances BEFORE action
+                        wallet_before = get_wallet_balance_eth()
+                        vault_before = get_vault_balance_eth()
+
                         if current_config == "A":
                             # ── Config A: NO guardrails — send directly to LLM ──
                             response = st.session_state.agent_executor.invoke({
@@ -431,6 +487,7 @@ with tab_chat:
                             })
                             output = f"⚠️ *[Config A — No Guardrails]*\n\n{output_text(response['output'])}"
                             st.markdown(output)
+                            record_metric(user_input, "A", "EXECUTED", output, wallet_before, vault_before)
                         else:
                             # ── Config C: ChainGuard on-chain enforcement ──
                             # Step 1: Pre-screen the prompt BEFORE LLM
@@ -447,6 +504,7 @@ with tab_chat:
                                     f"This decision has been recorded on-chain in the PDR audit log."
                                 )
                                 st.error(output)
+                                record_metric(user_input, "C", "BLOCK", screen_result.get("reason", ""), wallet_before, vault_before)
                             elif screen_result and screen_result["decision"] == "WARN":
                                 # Warn but still process
                                 st.warning(f"⚠️ ChainGuard Warning: {screen_result['reason']}")
@@ -456,6 +514,7 @@ with tab_chat:
                                 })
                                 output = f"⚠️ *Warning: {screen_result['reason']}*\n\n{output_text(response['output'])}"
                                 st.markdown(output)
+                                record_metric(user_input, "C", "WARN", output, wallet_before, vault_before)
                             else:
                                 # Clean prompt — pass to LLM
                                 response = st.session_state.agent_executor.invoke({
@@ -464,6 +523,7 @@ with tab_chat:
                                 })
                                 output = output_text(response["output"])
                                 st.markdown(output)
+                                record_metric(user_input, "C", "ALLOW", output, wallet_before, vault_before)
 
                         # Update histories
                         st.session_state.messages.append({"role": "assistant", "content": output})
@@ -479,7 +539,114 @@ with tab_chat:
             st.rerun()
 
 
-# ── Tab 2: Policy Rules ─────────────────────────────────────────
+# ── Tab 2: Evaluation Results ───────────────────────────────────
+with tab_eval:
+    st.markdown("### Evaluation Results — Config A vs Config C")
+    st.caption("Evidence trail: compare what happens with and without ChainGuard protection")
+
+    metrics = st.session_state.eval_metrics
+
+    if not metrics:
+        st.info("No interactions recorded yet. Use the **AI Agent Chat** tab to test prompts under Config A and Config C, then come back here.")
+        st.markdown("""
+        **Recommended evaluation steps:**
+        1. Start agent with **Config C** (ChainGuard) → try a safe command → try an injection attack
+        2. Reset agent → switch to **Config A** (No Guardrails) → try the same injection attack
+        3. Come to this tab to see the evidence side-by-side
+        """)
+    else:
+        # ── Summary cards ──
+        config_a_metrics = [m for m in metrics if m["config"] == "A"]
+        config_c_metrics = [m for m in metrics if m["config"] == "C"]
+
+        col_a, col_c = st.columns(2)
+
+        with col_a:
+            st.markdown("#### ⚠️ Config A — No Guardrails")
+            a_total = len(config_a_metrics)
+            a_attacks = [m for m in config_a_metrics if m["decision"] == "EXECUTED"]
+            st.markdown(f"""
+            <div class="status-card" style="border-left: 4px solid #ea4335;">
+                <p>Total prompts: <b>{a_total}</b></p>
+                <p>All executed: <b style="color: #ea4335;">{len(a_attacks)}</b> (no filtering)</p>
+                <p>Attacks blocked: <b style="color: #ea4335;">0</b></p>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with col_c:
+            st.markdown("#### 🛡️ Config C — ChainGuard")
+            c_total = len(config_c_metrics)
+            c_blocked = [m for m in config_c_metrics if m["decision"] == "BLOCK"]
+            c_allowed = [m for m in config_c_metrics if m["decision"] == "ALLOW"]
+            c_warned = [m for m in config_c_metrics if m["decision"] == "WARN"]
+            st.markdown(f"""
+            <div class="status-card" style="border-left: 4px solid #34a853;">
+                <p>Total prompts: <b>{c_total}</b></p>
+                <p>Attacks blocked: <b style="color: #34a853;">{len(c_blocked)}</b></p>
+                <p>Safe actions allowed: <b>{len(c_allowed)}</b></p>
+                <p>Warnings issued: <b>{len(c_warned)}</b></p>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.divider()
+
+        # ── Detailed interaction log ──
+        st.markdown("#### Interaction Evidence Log")
+        st.caption("Every prompt, decision, and balance change — proof for your supervisor")
+
+        for i, m in enumerate(reversed(metrics)):
+            idx = len(metrics) - i
+            config_badge = "⚠️ A" if m["config"] == "A" else "🛡️ C"
+            decision_color = {
+                "BLOCK": "🚫 BLOCK",
+                "ALLOW": "✅ ALLOW",
+                "WARN": "⚠️ WARN",
+                "EXECUTED": "💀 EXECUTED (no protection)",
+            }.get(m["decision"], m["decision"])
+
+            with st.expander(
+                f"#{idx} [{config_badge}] {m['timestamp']} — \"{m['prompt'][:50]}...\" → {decision_color}",
+                expanded=(m["decision"] in ("BLOCK", "EXECUTED") and i < 5),
+            ):
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown(f"**Prompt:** `{m['prompt']}`")
+                    st.markdown(f"**Config:** {config_badge}")
+                    st.markdown(f"**Decision:** {decision_color}")
+                    if m["output"]:
+                        st.markdown(f"**Agent Response:** {m['output'][:300]}")
+
+                with c2:
+                    st.markdown("**Balance Evidence:**")
+                    if m["wallet_before"] is not None:
+                        st.markdown(f"- Wallet before: **{m['wallet_before']:.4f} ETH**")
+                        st.markdown(f"- Wallet after:  **{m['wallet_after']:.4f} ETH**")
+                        change = m["wallet_change"]
+                        if change and abs(change) > 0.0001:
+                            color = "red" if change < 0 else "green"
+                            st.markdown(f"- Wallet change: **<span style='color:{color}'>{change:+.4f} ETH</span>**", unsafe_allow_html=True)
+                        else:
+                            st.markdown("- Wallet change: **0 ETH** (no movement)")
+
+                    if m["vault_before"] is not None:
+                        st.markdown(f"- Vault before: **{m['vault_before']:.4f} ETH**")
+                        st.markdown(f"- Vault after:  **{m['vault_after']:.4f} ETH**")
+                        vchange = m["vault_change"]
+                        if vchange and abs(vchange) > 0.0001:
+                            color = "red" if vchange < 0 else "green"
+                            st.markdown(f"- Vault change: **<span style='color:{color}'>{vchange:+.4f} ETH</span>**", unsafe_allow_html=True)
+                        else:
+                            st.markdown("- Vault change: **0 ETH** (no movement)")
+
+        st.divider()
+
+        # ── Clear metrics button ──
+        if st.button("🗑️ Clear Evaluation Data", use_container_width=True):
+            st.session_state.eval_metrics = []
+            st.rerun()
+
+
+# ── Tab 3: Policy Rules ─────────────────────────────────────────  (was Tab 2)
 with tab_rules:
     st.markdown("### On-Chain Policy Rules")
     st.caption("Rules stored in the PolicyRegistry smart contract — enforced on every AI agent action")
