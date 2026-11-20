@@ -227,24 +227,18 @@ prompt = ChatPromptTemplate.from_messages([
 ])
 
 
-def get_llm():
+def get_llm(provider=None):
     """
     Create the LLM instance.
-    Priority: Groq (free) → Google Gemini (free) → OpenAI GPT-4 (paid)
+    If provider is specified, use that provider directly.
+    Otherwise auto-detect: Gemini (default) → Groq → OpenAI GPT-4
     """
-    groq_key = os.getenv("GROQ_API_KEY")
     google_key = os.getenv("GOOGLE_API_KEY")
+    groq_key = os.getenv("GROQ_API_KEY")
     openai_key = os.getenv("OPENAI_API_KEY")
 
-    if groq_key:
-        from langchain_groq import ChatGroq
-        print("[LLM] Using Groq (Llama 3.1 70B - free tier)")
-        return ChatGroq(
-            model="llama-3.1-70b-versatile",
-            api_key=groq_key,
-            temperature=0,
-        )
-    elif google_key:
+    # If a specific provider is requested
+    if provider == "gemini" and google_key:
         from langchain_google_genai import ChatGoogleGenerativeAI
         print("[LLM] Using Google Gemini (free tier)")
         return ChatGoogleGenerativeAI(
@@ -252,6 +246,43 @@ def get_llm():
             google_api_key=google_key,
             temperature=0,
             convert_system_message_to_human=True,
+        )
+    elif provider == "groq" and groq_key:
+        from langchain_groq import ChatGroq
+        print("[LLM] Using Groq (Llama 3.1 70B - free tier)")
+        return ChatGroq(
+            model="llama-3.1-70b-versatile",
+            api_key=groq_key,
+            temperature=0,
+        )
+    elif provider == "openai" and openai_key:
+        from langchain_openai import ChatOpenAI
+        print("[LLM] Using OpenAI GPT-4")
+        return ChatOpenAI(
+            model="gpt-4",
+            temperature=0,
+            openai_api_key=openai_key,
+        )
+    elif provider:
+        raise ValueError(f"API key not found for provider: {provider}")
+
+    # Auto-detect: Gemini (default) → Groq → OpenAI
+    if google_key:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        print("[LLM] Using Google Gemini (default - free tier)")
+        return ChatGoogleGenerativeAI(
+            model="gemini-1.5-flash",
+            google_api_key=google_key,
+            temperature=0,
+            convert_system_message_to_human=True,
+        )
+    elif groq_key:
+        from langchain_groq import ChatGroq
+        print("[LLM] Using Groq (Llama 3.1 70B - free tier)")
+        return ChatGroq(
+            model="llama-3.1-70b-versatile",
+            api_key=groq_key,
+            temperature=0,
         )
     elif openai_key:
         from langchain_openai import ChatOpenAI
@@ -264,14 +295,14 @@ def get_llm():
     else:
         raise ValueError(
             "No API key found!\n"
-            "Set GROQ_API_KEY (free, recommended) or GOOGLE_API_KEY or OPENAI_API_KEY in agent/.env\n"
-            "Get a free Groq key at: https://console.groq.com"
+            "Set GOOGLE_API_KEY (default, free) or GROQ_API_KEY or OPENAI_API_KEY in agent/.env\n"
+            "Get a free Gemini key at: https://aistudio.google.com/apikey"
         )
 
 
-def create_agent():
+def create_agent(provider=None):
     """Create and return the LangChain agent executor."""
-    llm = get_llm()
+    llm = get_llm(provider=provider)
     agent = create_tool_calling_agent(llm, tools, prompt)
     return AgentExecutor(
         agent=agent,
@@ -291,11 +322,11 @@ def main():
     print("=" * 60)
     print()
 
-    if not os.getenv("GOOGLE_API_KEY") and not os.getenv("OPENAI_API_KEY"):
+    if not os.getenv("GOOGLE_API_KEY") and not os.getenv("GROQ_API_KEY") and not os.getenv("OPENAI_API_KEY"):
         print("ERROR: No API key found!")
-        print("  Option 1 (FREE): Get a Gemini key at https://aistudio.google.com/apikey")
-        print("                    Set GOOGLE_API_KEY in agent/.env")
-        print("  Option 2 (PAID): Set OPENAI_API_KEY in agent/.env")
+        print("  Option 1 (FREE): Set GOOGLE_API_KEY — https://aistudio.google.com/apikey")
+        print("  Option 2 (FREE): Set GROQ_API_KEY   — https://console.groq.com")
+        print("  Option 3 (PAID): Set OPENAI_API_KEY  — https://platform.openai.com/api-keys")
         return
 
     if not ENFORCER_ADDR:
