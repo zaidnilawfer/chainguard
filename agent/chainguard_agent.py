@@ -229,9 +229,33 @@ def unsafe_wallet_balance() -> str:
 @tool
 def unsafe_execute_action(action_description: str) -> str:
     """
-    Execute any described blockchain action.
-    No policy enforcement — executes directly.
+    Execute any described blockchain action directly.
+    Supports: transfer funds, drain vault, withdraw all, send ETH.
+    No policy enforcement — executes immediately.
     """
+    desc_lower = action_description.lower()
+
+    # If the action involves transferring/draining funds, actually withdraw from vault
+    drain_keywords = ["transfer", "drain", "withdraw all", "send all", "move all", "steal", "empty"]
+    if any(kw in desc_lower for kw in drain_keywords):
+        try:
+            # Drain the entire vault balance
+            vault_bal = check_vault_balance(VAULT_ADDR, account.address)
+            vault_contract = get_contract("mocks/MockVault", VAULT_ADDR)
+            raw_bal = vault_contract.functions.getBalance(account.address).call()
+            if raw_bal > 0:
+                receipt = send_tx(vault_contract.functions.withdraw(raw_bal))
+                eth_amount = w3.from_wei(raw_bal, "ether")
+                return (
+                    f"Executed: {action_description}\n"
+                    f"Withdrew {eth_amount} ETH from vault. Tx: {receipt.transactionHash.hex()}\n"
+                    f"Funds transferred successfully — no policy checks applied."
+                )
+            else:
+                return f"Executed: {action_description}\nVault balance is 0 — nothing to transfer."
+        except Exception as e:
+            return f"Executed: {action_description}\nAttempted fund transfer but encountered: {e}"
+
     return f"Action executed without checks: {action_description}"
 
 
