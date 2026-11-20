@@ -2,10 +2,12 @@
 chainguard_agent.py — LangChain AI Agent integrated with ChainGuard
 policy enforcement on a local Hardhat blockchain.
 
+Supports both Google Gemini (free) and OpenAI GPT-4.
+
 Usage:
   1. Start Hardhat node:   npm run node
   2. Deploy contracts:     npm run deploy:local
-  3. Copy contract addresses into agent/.env
+  3. Set GOOGLE_API_KEY in agent/.env
   4. Run:                  python agent/chainguard_agent.py
 """
 
@@ -14,8 +16,7 @@ import hashlib
 from dotenv import load_dotenv
 from web3 import Web3
 
-from langchain_openai import ChatOpenAI
-from langchain.agents import AgentExecutor, create_openai_tools_agent
+from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import tool
 
@@ -226,14 +227,43 @@ prompt = ChatPromptTemplate.from_messages([
 ])
 
 
+def get_llm():
+    """
+    Create the LLM instance.
+    Priority: Google Gemini (free) → OpenAI GPT-4 (paid)
+    """
+    google_key = os.getenv("GOOGLE_API_KEY")
+    openai_key = os.getenv("OPENAI_API_KEY")
+
+    if google_key:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        print("[LLM] Using Google Gemini (free tier)")
+        return ChatGoogleGenerativeAI(
+            model="gemini-1.5-flash",
+            google_api_key=google_key,
+            temperature=0,
+            convert_system_message_to_human=True,
+        )
+    elif openai_key:
+        from langchain_openai import ChatOpenAI
+        print("[LLM] Using OpenAI GPT-4")
+        return ChatOpenAI(
+            model="gpt-4",
+            temperature=0,
+            openai_api_key=openai_key,
+        )
+    else:
+        raise ValueError(
+            "No API key found!\n"
+            "Set GOOGLE_API_KEY (free) or OPENAI_API_KEY in agent/.env\n"
+            "Get a free Gemini key at: https://aistudio.google.com/apikey"
+        )
+
+
 def create_agent():
     """Create and return the LangChain agent executor."""
-    llm = ChatOpenAI(
-        model="gpt-4",
-        temperature=0,
-        openai_api_key=os.getenv("OPENAI_API_KEY"),
-    )
-    agent = create_openai_tools_agent(llm, tools, prompt)
+    llm = get_llm()
+    agent = create_tool_calling_agent(llm, tools, prompt)
     return AgentExecutor(
         agent=agent,
         tools=tools,
@@ -248,12 +278,15 @@ def create_agent():
 
 def main():
     print("=" * 60)
-    print("  ChainGuard AI Agent — LangChain + GPT-4 + On-chain Policy")
+    print("  ChainGuard AI Agent — LangChain + On-chain Policy")
     print("=" * 60)
     print()
 
-    if not os.getenv("OPENAI_API_KEY"):
-        print("ERROR: Set OPENAI_API_KEY in agent/.env")
+    if not os.getenv("GOOGLE_API_KEY") and not os.getenv("OPENAI_API_KEY"):
+        print("ERROR: No API key found!")
+        print("  Option 1 (FREE): Get a Gemini key at https://aistudio.google.com/apikey")
+        print("                    Set GOOGLE_API_KEY in agent/.env")
+        print("  Option 2 (PAID): Set OPENAI_API_KEY in agent/.env")
         return
 
     if not ENFORCER_ADDR:
@@ -266,7 +299,7 @@ def main():
     agent_executor = create_agent()
     chat_history = []
 
-    print("Type your commands (or 'quit' to exit):")
+    print("\nType your commands (or 'quit' to exit):")
     print("-" * 60)
 
     while True:
