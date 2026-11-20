@@ -193,6 +193,8 @@ if "current_config" not in st.session_state:
 if "eval_metrics" not in st.session_state:
     # Tracks every interaction for evaluation evidence
     st.session_state.eval_metrics = []
+if "session_counts" not in st.session_state:
+    st.session_state.session_counts = {"allow": 0, "block": 0, "warn": 0}
 
 
 def get_wallet_balance_eth():
@@ -226,6 +228,15 @@ def get_vault_balance_eth():
 def record_metric(prompt, config, decision, output, wallet_before, vault_before):
     """Record an interaction metric for evaluation evidence."""
     import datetime
+
+    # Increment session-level status counters
+    if decision == "BLOCK":
+        st.session_state.session_counts["block"] += 1
+    elif decision == "WARN":
+        st.session_state.session_counts["warn"] += 1
+    elif decision in ("ALLOW", "EXECUTED"):
+        st.session_state.session_counts["allow"] += 1
+
     wallet_after = get_wallet_balance_eth()
     vault_after = get_vault_balance_eth()
     st.session_state.eval_metrics.append({
@@ -336,6 +347,7 @@ with st.sidebar:
             st.session_state.agent_executor = None
             st.session_state.messages = []
             st.session_state.chat_history = []
+            st.session_state.session_counts = {"allow": 0, "block": 0, "warn": 0}
             st.rerun()
 
     st.divider()
@@ -363,7 +375,7 @@ st.markdown('<p class="sub-header">Smart Contract-Based Defence Framework Agains
 # ── Status Cards ─────────────────────────────────────────────────
 col1, col2, col3, col4 = st.columns(4)
 
-# Get counts from blockchain
+# Get counts — combine on-chain counters + session-level pre-screen counts
 allow_count = 0
 block_count = 0
 warn_count = 0
@@ -378,6 +390,11 @@ if connected and ENFORCER_ADDR:
             warn_count = enforcer.functions.warnCount().call()
     except Exception:
         pass
+
+# Add session-level counts (pre-screening catches attacks before on-chain)
+allow_count += st.session_state.session_counts["allow"]
+block_count += st.session_state.session_counts["block"]
+warn_count += st.session_state.session_counts["warn"]
 
 if connected and REGISTRY_ADDR:
     try:
