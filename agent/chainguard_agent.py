@@ -230,12 +230,21 @@ prompt = ChatPromptTemplate.from_messages([
 def get_llm():
     """
     Create the LLM instance.
-    Priority: Google Gemini (free) → OpenAI GPT-4 (paid)
+    Priority: Groq (free) → Google Gemini (free) → OpenAI GPT-4 (paid)
     """
+    groq_key = os.getenv("GROQ_API_KEY")
     google_key = os.getenv("GOOGLE_API_KEY")
     openai_key = os.getenv("OPENAI_API_KEY")
 
-    if google_key:
+    if groq_key:
+        from langchain_groq import ChatGroq
+        print("[LLM] Using Groq (Llama 3.1 70B - free tier)")
+        return ChatGroq(
+            model="llama-3.1-70b-versatile",
+            api_key=groq_key,
+            temperature=0,
+        )
+    elif google_key:
         from langchain_google_genai import ChatGoogleGenerativeAI
         print("[LLM] Using Google Gemini (free tier)")
         return ChatGoogleGenerativeAI(
@@ -255,8 +264,8 @@ def get_llm():
     else:
         raise ValueError(
             "No API key found!\n"
-            "Set GOOGLE_API_KEY (free) or OPENAI_API_KEY in agent/.env\n"
-            "Get a free Gemini key at: https://aistudio.google.com/apikey"
+            "Set GROQ_API_KEY (free, recommended) or GOOGLE_API_KEY or OPENAI_API_KEY in agent/.env\n"
+            "Get a free Groq key at: https://console.groq.com"
         )
 
 
