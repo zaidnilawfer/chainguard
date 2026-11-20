@@ -188,16 +188,19 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 if "current_provider" not in st.session_state:
     st.session_state.current_provider = None
+if "current_config" not in st.session_state:
+    st.session_state.current_config = "C"
 
 
-def init_agent(provider=None):
+def init_agent(provider=None, config="C"):
     """Initialise the LangChain agent."""
     try:
         # Add parent dir to path so we can import
         sys.path.insert(0, os.path.dirname(__file__))
         from chainguard_agent import create_agent
-        st.session_state.agent_executor = create_agent(provider=provider)
+        st.session_state.agent_executor = create_agent(provider=provider, config=config)
         st.session_state.current_provider = provider
+        st.session_state.current_config = config
         st.session_state.chat_history = []
         return True
     except Exception as e:
@@ -227,6 +230,26 @@ with st.sidebar:
 
     st.divider()
 
+    # Evaluation Config selection
+    st.markdown("### Evaluation Config")
+    config_options = {
+        "Config A — No Guardrails ⚠️": "A",
+        "Config C — ChainGuard On-chain 🛡️": "C",
+    }
+    selected_config_label = st.selectbox(
+        "Security mode:",
+        options=list(config_options.keys()),
+        index=1,  # Default to Config C
+    )
+    selected_config = config_options[selected_config_label]
+
+    if selected_config == "A":
+        st.warning("⚠️ **VULNERABLE MODE** — No prompt injection defence. Attacks will succeed.")
+    else:
+        st.success("🛡️ ChainGuard active — prompt injection attacks will be blocked.")
+
+    st.divider()
+
     # LLM Provider selection
     st.markdown("### LLM Provider")
     providers = get_available_providers()
@@ -240,8 +263,9 @@ with st.sidebar:
 
         if st.button("🚀 Start Agent", use_container_width=True, type="primary"):
             with st.spinner("Initialising agent..."):
-                if init_agent(provider=selected_provider):
-                    st.success(f"Agent ready with {selected_label}!")
+                if init_agent(provider=selected_provider, config=selected_config):
+                    config_name = "A (No Guardrails)" if selected_config == "A" else "C (ChainGuard)"
+                    st.success(f"Agent ready with {selected_label} — {config_name}!")
                     st.rerun()
     else:
         st.warning("No API keys found in .env")
@@ -255,7 +279,8 @@ with st.sidebar:
     if st.session_state.agent_executor:
         st.divider()
         provider_name = st.session_state.current_provider or "auto"
-        st.info(f"🤖 Agent active: **{provider_name}**")
+        config_label = "A (⚠️ No Guardrails)" if st.session_state.current_config == "A" else "C (🛡️ ChainGuard)"
+        st.info(f"🤖 Agent active: **{provider_name}**\n\n📋 Config: **{config_label}**")
         if st.button("🔄 Reset Agent", use_container_width=True):
             st.session_state.agent_executor = None
             st.session_state.messages = []
@@ -396,37 +421,49 @@ with tab_chat:
                         from langchain_core.messages import HumanMessage, AIMessage
                         from chainguard_agent import pre_screen_prompt, output_text
 
-                        # Step 1: Pre-screen the prompt BEFORE LLM
-                        screen_result = pre_screen_prompt(user_input)
+                        current_config = st.session_state.current_config
 
-                        if screen_result and screen_result["decision"] == "BLOCK":
-                            output = (
-                                f"🚫 **ACTION BLOCKED by ChainGuard**\n\n"
-                                f"**Decision:** BLOCK\n\n"
-                                f"**Reason:** {screen_result['reason']}\n\n"
-                                f"**Matched Rule ID:** {screen_result.get('matchedRuleId', 'N/A')}\n\n"
-                                f"**Classifier Score:** {screen_result.get('classifierScore', 0)}\n\n"
-                                f"Your prompt was flagged as a potential prompt injection attack. "
-                                f"This decision has been recorded on-chain in the PDR audit log."
-                            )
-                            st.error(output)
-                        elif screen_result and screen_result["decision"] == "WARN":
-                            # Warn but still process
-                            st.warning(f"⚠️ ChainGuard Warning: {screen_result['reason']}")
+                        if current_config == "A":
+                            # ── Config A: NO guardrails — send directly to LLM ──
                             response = st.session_state.agent_executor.invoke({
                                 "input": user_input,
                                 "chat_history": st.session_state.chat_history,
                             })
-                            output = f"⚠️ *Warning: {screen_result['reason']}*\n\n{output_text(response['output'])}"
+                            output = f"⚠️ *[Config A — No Guardrails]*\n\n{output_text(response['output'])}"
                             st.markdown(output)
                         else:
-                            # Clean prompt — pass to LLM
-                            response = st.session_state.agent_executor.invoke({
-                                "input": user_input,
-                                "chat_history": st.session_state.chat_history,
-                            })
-                            output = output_text(response["output"])
-                            st.markdown(output)
+                            # ── Config C: ChainGuard on-chain enforcement ──
+                            # Step 1: Pre-screen the prompt BEFORE LLM
+                            screen_result = pre_screen_prompt(user_input)
+
+                            if screen_result and screen_result["decision"] == "BLOCK":
+                                output = (
+                                    f"🚫 **ACTION BLOCKED by ChainGuard**\n\n"
+                                    f"**Decision:** BLOCK\n\n"
+                                    f"**Reason:** {screen_result['reason']}\n\n"
+                                    f"**Matched Rule ID:** {screen_result.get('matchedRuleId', 'N/A')}\n\n"
+                                    f"**Classifier Score:** {screen_result.get('classifierScore', 0)}\n\n"
+                                    f"Your prompt was flagged as a potential prompt injection attack. "
+                                    f"This decision has been recorded on-chain in the PDR audit log."
+                                )
+                                st.error(output)
+                            elif screen_result and screen_result["decision"] == "WARN":
+                                # Warn but still process
+                                st.warning(f"⚠️ ChainGuard Warning: {screen_result['reason']}")
+                                response = st.session_state.agent_executor.invoke({
+                                    "input": user_input,
+                                    "chat_history": st.session_state.chat_history,
+                                })
+                                output = f"⚠️ *Warning: {screen_result['reason']}*\n\n{output_text(response['output'])}"
+                                st.markdown(output)
+                            else:
+                                # Clean prompt — pass to LLM
+                                response = st.session_state.agent_executor.invoke({
+                                    "input": user_input,
+                                    "chat_history": st.session_state.chat_history,
+                                })
+                                output = output_text(response["output"])
+                                st.markdown(output)
 
                         # Update histories
                         st.session_state.messages.append({"role": "assistant", "content": output})
