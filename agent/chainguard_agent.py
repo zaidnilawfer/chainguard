@@ -16,7 +16,11 @@ import hashlib
 from dotenv import load_dotenv
 from web3 import Web3
 
-from langchain.agents import AgentExecutor, create_tool_calling_agent
+try:
+    # LangChain >= 1.0 moved the legacy AgentExecutor API to langchain-classic
+    from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
+except ImportError:
+    from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import tool
 
@@ -242,16 +246,16 @@ def get_llm(provider=None):
         from langchain_google_genai import ChatGoogleGenerativeAI
         print("[LLM] Using Google Gemini (free tier)")
         return ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
+            model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
             google_api_key=google_key,
             temperature=0,
             convert_system_message_to_human=True,
         )
     elif provider == "groq" and groq_key:
         from langchain_groq import ChatGroq
-        print("[LLM] Using Groq (Llama 3.1 70B - free tier)")
+        print("[LLM] Using Groq (Llama 3.3 70B - free tier)")
         return ChatGroq(
-            model="llama-3.1-70b-versatile",
+            model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
             api_key=groq_key,
             temperature=0,
         )
@@ -271,16 +275,16 @@ def get_llm(provider=None):
         from langchain_google_genai import ChatGoogleGenerativeAI
         print("[LLM] Using Google Gemini (default - free tier)")
         return ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
+            model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
             google_api_key=google_key,
             temperature=0,
             convert_system_message_to_human=True,
         )
     elif groq_key:
         from langchain_groq import ChatGroq
-        print("[LLM] Using Groq (Llama 3.1 70B - free tier)")
+        print("[LLM] Using Groq (Llama 3.3 70B - free tier)")
         return ChatGroq(
-            model="llama-3.1-70b-versatile",
+            model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
             api_key=groq_key,
             temperature=0,
         )
@@ -326,6 +330,19 @@ def pre_screen_prompt(user_input: str) -> dict | None:
         }
 
     return None
+
+
+def output_text(output):
+    """Normalise agent output to plain text.
+
+    Newer Gemini models return content as a list of blocks
+    ([{'type': 'text', 'text': ...}, ...]) instead of a string.
+    """
+    if isinstance(output, list):
+        return "".join(
+            b.get("text", "") if isinstance(b, dict) else str(b) for b in output
+        )
+    return str(output)
 
 
 def create_agent(provider=None):
@@ -398,7 +415,7 @@ def main():
                     "input": user_input,
                     "chat_history": chat_history,
                 })
-                output = response["output"]
+                output = output_text(response["output"])
                 print(f"\nAgent: {output}")
 
             # Keep chat history

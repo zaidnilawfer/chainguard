@@ -394,7 +394,7 @@ with tab_chat:
                 with st.spinner("ChainGuard processing..."):
                     try:
                         from langchain_core.messages import HumanMessage, AIMessage
-                        from chainguard_agent import pre_screen_prompt
+                        from chainguard_agent import pre_screen_prompt, output_text
 
                         # Step 1: Pre-screen the prompt BEFORE LLM
                         screen_result = pre_screen_prompt(user_input)
@@ -417,7 +417,7 @@ with tab_chat:
                                 "input": user_input,
                                 "chat_history": st.session_state.chat_history,
                             })
-                            output = f"⚠️ *Warning: {screen_result['reason']}*\n\n{response['output']}"
+                            output = f"⚠️ *Warning: {screen_result['reason']}*\n\n{output_text(response['output'])}"
                             st.markdown(output)
                         else:
                             # Clean prompt — pass to LLM
@@ -425,7 +425,7 @@ with tab_chat:
                                 "input": user_input,
                                 "chat_history": st.session_state.chat_history,
                             })
-                            output = response["output"]
+                            output = output_text(response["output"])
                             st.markdown(output)
 
                         # Update histories
