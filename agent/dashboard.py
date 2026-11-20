@@ -394,14 +394,39 @@ with tab_chat:
                 with st.spinner("ChainGuard processing..."):
                     try:
                         from langchain_core.messages import HumanMessage, AIMessage
+                        from chainguard_agent import pre_screen_prompt
 
-                        response = st.session_state.agent_executor.invoke({
-                            "input": user_input,
-                            "chat_history": st.session_state.chat_history,
-                        })
+                        # Step 1: Pre-screen the prompt BEFORE LLM
+                        screen_result = pre_screen_prompt(user_input)
 
-                        output = response["output"]
-                        st.markdown(output)
+                        if screen_result and screen_result["decision"] == "BLOCK":
+                            output = (
+                                f"🚫 **ACTION BLOCKED by ChainGuard**\n\n"
+                                f"**Decision:** BLOCK\n\n"
+                                f"**Reason:** {screen_result['reason']}\n\n"
+                                f"**Matched Rule ID:** {screen_result.get('matchedRuleId', 'N/A')}\n\n"
+                                f"**Classifier Score:** {screen_result.get('classifierScore', 0)}\n\n"
+                                f"Your prompt was flagged as a potential prompt injection attack. "
+                                f"This decision has been recorded on-chain in the PDR audit log."
+                            )
+                            st.error(output)
+                        elif screen_result and screen_result["decision"] == "WARN":
+                            # Warn but still process
+                            st.warning(f"⚠️ ChainGuard Warning: {screen_result['reason']}")
+                            response = st.session_state.agent_executor.invoke({
+                                "input": user_input,
+                                "chat_history": st.session_state.chat_history,
+                            })
+                            output = f"⚠️ *Warning: {screen_result['reason']}*\n\n{response['output']}"
+                            st.markdown(output)
+                        else:
+                            # Clean prompt — pass to LLM
+                            response = st.session_state.agent_executor.invoke({
+                                "input": user_input,
+                                "chat_history": st.session_state.chat_history,
+                            })
+                            output = response["output"]
+                            st.markdown(output)
 
                         # Update histories
                         st.session_state.messages.append({"role": "assistant", "content": output})

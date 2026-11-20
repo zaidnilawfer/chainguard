@@ -300,6 +300,34 @@ def get_llm(provider=None):
         )
 
 
+def pre_screen_prompt(user_input: str) -> dict | None:
+    """
+    Pre-screen every user prompt BEFORE it reaches the LLM.
+    Runs keyword_scan + on-chain enforce_policy on the raw input.
+    Returns the block/warn result if detected, None if clean.
+    """
+    keywords = keyword_scan(user_input)
+    if not keywords:
+        return None  # Clean prompt, let the LLM handle it
+
+    # Keywords matched — enforce on-chain policy
+    target = VAULT_ADDR if VAULT_ADDR else "0x0000000000000000000000000000000000000000"
+    try:
+        result = enforce_policy("user_prompt", target, user_input, keywords)
+        if result["decision"] in ("BLOCK", "WARN"):
+            return result
+    except Exception as e:
+        # If on-chain call fails, still block based on keyword match
+        return {
+            "decision": "BLOCK",
+            "matchedRuleId": 0,
+            "classifierScore": 0,
+            "reason": f"Prompt blocked (keyword match: {keywords})",
+        }
+
+    return None
+
+
 def create_agent(provider=None):
     """Create and return the LangChain agent executor."""
     llm = get_llm(provider=provider)
@@ -351,17 +379,32 @@ def main():
                 print("Goodbye!")
                 break
 
-            response = agent_executor.invoke({
-                "input": user_input,
-                "chat_history": chat_history,
-            })
+            # Pre-screen prompt before LLM
+            screen_result = pre_screen_prompt(user_input)
 
-            print(f"\nAgent: {response['output']}")
+            if screen_result and screen_result["decision"] == "BLOCK":
+                output = (
+                    f"[BLOCKED by ChainGuard] {screen_result['reason']}\n"
+                    f"  Matched Rule: #{screen_result.get('matchedRuleId', 'N/A')}\n"
+                    f"  Classifier Score: {screen_result.get('classifierScore', 0)}\n"
+                    f"  Decision logged on-chain."
+                )
+                print(f"\nAgent: {output}")
+            else:
+                if screen_result and screen_result["decision"] == "WARN":
+                    print(f"\n[WARNING] {screen_result['reason']}")
+
+                response = agent_executor.invoke({
+                    "input": user_input,
+                    "chat_history": chat_history,
+                })
+                output = response["output"]
+                print(f"\nAgent: {output}")
 
             # Keep chat history
             from langchain_core.messages import HumanMessage, AIMessage
             chat_history.append(HumanMessage(content=user_input))
-            chat_history.append(AIMessage(content=response["output"]))
+            chat_history.append(AIMessage(content=output))
 
         except KeyboardInterrupt:
             print("\nGoodbye!")
