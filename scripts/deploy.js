@@ -74,7 +74,26 @@ MOCK_VAULT_ADDRESS=${vaultAddr}
 `;
 
   const envPath = path.join(__dirname, "..", "agent", ".env");
-  fs.writeFileSync(envPath, envContent);
+  if (fs.existsSync(envPath)) {
+    // Preserve existing settings (API keys, model overrides) and only
+    // update the contract addresses.
+    const addresses = {
+      POLICY_REGISTRY_ADDRESS: registryAddr,
+      POLICY_ENFORCER_ADDRESS: enforcerAddr,
+      PDR_LOGGER_ADDRESS: loggerAddr,
+      MOCK_VAULT_ADDRESS: vaultAddr,
+    };
+    let existing = fs.readFileSync(envPath, "utf8");
+    for (const [key, value] of Object.entries(addresses)) {
+      const re = new RegExp(`^${key}=.*$`, "m");
+      existing = re.test(existing)
+        ? existing.replace(re, `${key}=${value}`)
+        : `${existing.replace(/\s*$/, "")}\n${key}=${value}\n`;
+    }
+    fs.writeFileSync(envPath, existing);
+  } else {
+    fs.writeFileSync(envPath, envContent);
+  }
   console.log(`\nAgent .env written to: ${envPath}`);
 
   console.log("\n--- Deployment Summary ---");

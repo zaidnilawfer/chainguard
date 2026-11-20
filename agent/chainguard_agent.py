@@ -59,6 +59,14 @@ def enforce_policy(action_type: str, target: str, prompt: str,
     if not ENFORCER_ADDR:
         return {"decision": "ALLOW", "reason": "Enforcer not configured"}
 
+    # Fail closed: a configured-but-missing enforcer (e.g. the local node
+    # was restarted) must not silently turn into ALLOW.
+    if not w3.eth.get_code(Web3.to_checksum_address(ENFORCER_ADDR)):
+        raise RuntimeError(
+            f"PolicyEnforcer not deployed at {ENFORCER_ADDR}. "
+            "Redeploy with `npm run deploy:local`."
+        )
+
     enforcer = get_contract("PolicyEnforcer", ENFORCER_ADDR)
     prompt_hash = Web3.keccak(text=prompt)
 
@@ -87,7 +95,7 @@ def enforce_policy(action_type: str, target: str, prompt: str,
             "reason": event["reason"],
         }
 
-    return {"decision": "ALLOW", "reason": "No event emitted"}
+    raise RuntimeError("PolicyEnforcer emitted no ActionValidated event")
 
 
 def keyword_scan(prompt: str) -> str:
